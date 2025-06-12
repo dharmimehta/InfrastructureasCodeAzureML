@@ -1,0 +1,29 @@
+trigger: none
+
+pool:
+  name: Default
+
+variables:
+- group: mlops-connecion
+
+stages:
+- stage: 'Dev'
+  displayName: 'Dev'
+  jobs:
+  - job: "Setting up Infrastructure"
+    displayName: "Setting up Infrastructure"
+    pool:
+      vmImage: 'windows-latest'
+    timeoutInMinutes: 0
+    steps:
+    - task: AzureResourceGroupDeployment@2
+      inputs:
+        azureSubscription: '$(AZURE_RM_CONNECTION)'  
+        action: 'Create Or Update Resource Group'
+        resourceGroupName: '$(RESOURCE_GROUP)'
+        location: $(LOCATION)
+        templateLocation: 'Linked artifact'
+        csmFile: '$(Build.SourcesDirectory)/environment_setup/cloud-environment.json'
+        overrideParameters: '-baseName $(BASE_NAME) -location $(LOCATION) -workspace $(WORKSPACE_NAME)'
+        deploymentMode: 'Incremental'
+      displayName: 'Deploy OH resources to Azure'
