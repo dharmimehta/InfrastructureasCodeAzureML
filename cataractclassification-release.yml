@@ -1,0 +1,44 @@
+steps:
+- task: UsePythonVersion@0
+  displayName: 'Use Python 3.6'
+  inputs:
+    versionSpec: 3.6
+
+- task: AzureCLI@2
+  displayName: 'Azure CLI to get ML extension'
+  inputs:
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: 'az extension add -n azure cli-ml'
+ 
+
+- task: AzureCLI@2
+  displayName: 'Create a Kubernetes Instance'
+  inputs:
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: 'az ml computetarget create aks -g $(azuremLresourceGroup) -w $(azuremLworkspaceName) -n (aks.clusterName) -s $(aks.vmSize) -a $(aks.agentCount)'
+  
+
+- task: AzureCLI@2
+  displayName: 'Deploying to Kubernetes'
+  inputs:
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: 'az ml model deploy -g $(azuremLresourceGroup)  -w $(azuremLworkspaceName) -n $(service.name.prod) -f ../metadata/model.json --dc aksDeploymentConfigProd.yml --ic inferenceConfig.yml --ct $(aks.ClusterName) --overwrite'
+
+
+- task: Bash@3
+  displayName: 'Install python requirement'
+  inputs:
+    targetType: filePath
+    filePath: './install_requirements.sh'
+
+- task: AzureCLI@2
+  displayName: 'Prod test'
+  inputs:
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: 'pytest prod_test.py --doctest-modules --junitxml=junit/test-result.xml --cov=integration_test --cov-report=xml --scoreurl $(az ml service show -g $(azuremLresourceGroup) -w $(azuremLworkspaceName) -n $(service.name.prod) --query scoringUri -o tsv) --scorekey $(az ml service get-keys -g $(azuremLresourceGroup) -w $(azuremLworkspaceName) -n $(service.name.prod) --query scoringUri -o tsv)'
+  
+

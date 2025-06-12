@@ -1,0 +1,122 @@
+pool:
+  name: Default
+
+steps:
+- task: PythonScript@0
+  displayName: 'Installing python dependencies'
+  inputs:
+    scriptPath: 'package_requirement/install_requirements.sh'
+
+- task: Bash@3
+  displayName: 'Unit tests'
+  inputs:
+    targetType: filePath
+    filePath: './training/train_test.py'
+
+- task: PublishTestResults@2
+  displayName: 'Publish Test Results **/TEST-*.xml'
+
+- task: AzureCLI@2
+  displayName: 'Install Azure ML CLI '
+  inputs:
+    azureSubscription: 'azure-ml-connection'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: 'az extension add -n azure-cli-m;'
+
+
+- task: AzureCLI@2
+  displayName: 'Create Azure ML Workspace'
+  inputs:
+    azureSubscription: 'azure-ml-connection'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: 'az ml workspace create -g $(azuremLresourceGroup) -w $(azuremLworspaceName) -l $(azureml.Location) --exist-ok --yes'
+
+
+- task: AzureCLI@2
+  displayName: 'Create Azure ML Compute'
+  inputs:
+    azureSubscription: 'azure-ml-connection'
+    scriptType: bash
+    scriptLocation: inlineScript
+
+
+- script: 'pip install dvc[azure]' #If uploading data from Azure blob storage using dvc follow below scripts
+  displayName: 'Install DVC'
+  enabled: false
+
+- script: |
+   dvc remote modify azureremote account_name $(AZURE_STORAGE_ACCOUNT)
+   dvc remote modify azureremote account_key $(AZURE_STORAGE_KEY)
+   dvc pull
+  displayName: 'Pull Data from Azure Blob storage DVC'
+  enabled: false
+
+- task: AzureCLI@2
+  displayName: 'Upload data to data store'
+  inputs:
+    azureSubscription: 'azure-ml-connection'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+     az ml datastore upload -w $(azuremLworkspaceName) -g $(azuremLresourceGroup) -n $(az ml datastore show -default -w $(azuremLworkspaceName) -g $(azuremLresourceGroup) --query name -o tsv) -p data -u cataract --overwrite true
+     
+     az ml data create --name my_dataset \
+           --path $(Build.SourcesDirectory)/data \
+           --type uri_folder \
+           --description "Dataset pulled from DVC and registered in AML" \
+           --workspace-name $(WORKSPACE_NAME) \
+           --resource-group $(RESOURCE_GROUP) \
+           --version 1
+
+- script: |
+   mkdir metadata && mkdir models
+   
+  displayName: 'Make Metadata and Models Directory'
+
+- task: AzureCLI@2
+  displayName: 'Train the model'
+  inputs:
+    azureSubscription: 'azure-ml-connection'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: 'az ml run submit -script-q $(azuremLresourceGroup) -w $(azuremLworkspaceName) -e $(experimentName) --ct $(mlComputeCluster) -d conda_dependencies.yml -c train_cataract -t _/metadata/run.json train_aml.py'
+    workingDirectory: training
+
+- task: AzureCLI@2
+  displayName: 'Register Classification Model'
+  inputs:
+    azureSubscription: 'azure-ml-connection'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: 'az ml model register -g $(azuremLresourceGroup) -w $(azuremLworkspaceName) -n $(model.name) -f metadata/run.json --asset-path outputs/models/cataract_classification.pkl -d "Classification model to classify cataract situation" --tag "data" ="catarcat" --tag "model" = "classification" --model-framework ScikitLearn -t metadata/model.json'
+
+
+- task: AzureCLI@2
+  displayName: 'Downloading Model'
+  inputs:
+    azureSubscription: 'azure-ml-connection'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: 'az ml model download -g $(azuremlresourceGroup) -w $(azuremLworkspaceName) -i $(jq -r .modelld metadata/model.json) -t ./models --overwrite'
+
+
+- task: CopyFiles@2
+  displayName: 'Copy Files to: $(Build.ArtifactStagingDirectory)'
+  inputs:
+    SourceFolder: '$(Build.SourcesDirectory)'
+    Contents: |
+     **/metadata/**
+     **/models/**
+     **/deployment/**
+     **/test/integration/**
+     **/package_requirement/**
+    TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+- task: PublishPipelineArtifact@1
+  displayName: 'Publish Pipeline Artifact'
+  inputs:
+    targetPath: '$(Build.ArtifactStagingDirectory)'
+    artifact: 'Cataract Model'
+
